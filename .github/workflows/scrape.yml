@@ -58,19 +58,39 @@ jobs:
             debug/**/*.html
           if-no-files-found: warn
 
-      - name: Commit & push artifacts
+      - name: Commit & push Excel (with diagnostics)
         run: |
           set -e
-          if [ ! -f public/madrid_cursos.xlsx ] || [ ! -f public/madrid_cursos.json ]; then
-            echo "❌ Missing outputs, not committing."
+          echo "Git status BEFORE:"
+          git status -s || true
+          echo "Top-level:"
+          ls -la
+          echo "Public dir:"
+          ls -la public || true
+
+          # Ensure Git is happy in CI
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+          if [ ! -f public/madrid_cursos.xlsx ]; then
+            echo "❌ public/madrid_cursos.xlsx missing. Failing."
             exit 1
           fi
-          git config user.name "github-actions"
-          git config user.email "github-actions@users.noreply.github.com"
+
+          echo "Staging files…"
           git add -A
+
+          echo "Git status AFTER add:"
+          git status -s || true
+
           if git diff --cached --quiet; then
-            echo "No changes to commit."
-          else
-            git commit -m "chore: update madrid cursos feed"
-            git push
+            echo "ℹ️ No changes to commit (file may be identical)."
+            exit 0
           fi
+
+          echo "Committing…"
+          git commit -m "chore(data): update madrid_cursos.xlsx [skip ci]"
+
+          echo "Pushing…"
+          git push
