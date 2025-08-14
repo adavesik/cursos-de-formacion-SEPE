@@ -16,7 +16,7 @@ import { format } from "date-fns";
 // If you added shadcn/ui Button & Input, import them; otherwise replace with <button>/<input>
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Download, ExternalLink, Filter as FilterIcon, Loader2, RefreshCcw, Upload } from "lucide-react";
+import { Download, ExternalLink, Filter as FilterIcon, Loader2, Upload } from "lucide-react";
 
 type Course = {
   RowId: string;
