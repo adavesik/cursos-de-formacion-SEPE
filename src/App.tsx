@@ -285,16 +285,23 @@ export default function App() {
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 50 });
 
   // ---- Feed loader (Madrid JSON) ----
-  const [feedUrl, setFeedUrl] = useState<string>("/madrid_cursos.json"); // served by Vercel
+  const [feedUrl, setFeedUrl] = useState<string>("/madrid_cursos.xlsx");
+
   async function loadMadridFeed() {
+    const url = (feedUrl || "").trim();
+    if (!url) return alert("Pon la URL del feed");
     try {
-      const res = await fetch(feedUrl + `?t=${Date.now()}`);
+      const res = await fetch(url + `?t=${Date.now()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const lower = url.toLowerCase();
+
+    if (lower.endsWith(".json")) {
       const data: any[] = await res.json();
-      const mapped = data.map((r, i) => ({
+      const mapped = data.map((r: any, i: number) => ({
         RowId: `feed_${Date.now()}_${i}`,
         Codigo: r.Codigo ?? "",
-        Especialidad: r.Especialidad ?? "",
+        Especialidad: r.Eespecialidad ?? r.Especialidad ?? "",
         Denominacion: r.Denominacion ?? "",
         Inicio: r.Inicio ?? null,
         Fin: r.Fin ?? null,
@@ -311,16 +318,79 @@ export default function App() {
             : ""),
       }));
       setRows(mapped);
-      setMunicipios([]);
-      setModalidades([]);
-      setSearch("");
-      setOnlyUpcoming(false);
-      setDateFrom("");
-      setDateTo("");
-      setSelectedRowIds({});
-    } catch (e) {
-      alert("No pude cargar el feed. Revisa la URL / CORS.");
+    } else if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
+      const blob = await res.blob();
+      const table = await readXlsxFile(blob, { dateFormat: "yyyy-mm-dd" });
+      if (!table.length) throw new Error("Excel vacío.");
+
+      const headers = (table[0] as any[]).map((h) => String(h || ""));
+      const body = table.slice(1);
+
+      const mapped = body.map((row, i) => {
+        const obj: any = {};
+        headers.forEach((h, idx) => (obj[h] = row[idx] ?? null));
+        const rr = normalizeHeaders(obj);
+        const esp = rr.Especialidad ? String(rr.Especialidad) : "";
+        return {
+          RowId: `feed_${Date.now()}_${i}`,
+          Codigo: rr.Codigo ? String(rr.Codigo) : "",
+          Especialidad: esp,
+          Denominacion: rr.Denominacion ? String(rr.Denominacion) : "",
+          Inicio: rr.Inicio ?? null,
+          Fin: rr.Fin ?? null,
+          Modalidad: rr.Modalidad ? String(rr.Modalidad) : "",
+          Centro: rr.Centro ? String(rr.Centro) : "",
+          Municipio: rr.Municipio ? String(rr.Municipio) : "",
+          Nivel: "",
+          SEPE_URL: esp
+            ? `https://sede.sepe.gob.es/especialidadesformativas/RXBuscadorEFRED/DetalleEspecialidad.do?codEspecialidad=${encodeURIComponent(
+                esp
+              )}`
+            : "",
+        } as Course;
+      });
+      setRows(mapped);
+    } else if (lower.endsWith(".csv")) {
+      const text = await res.text();
+      const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+      const mapped = (parsed.data as any[]).map((r, i) => {
+        const rr = normalizeHeaders(r);
+        const esp = rr.Especialidad ? String(rr.Especialidad) : "";
+        return {
+          RowId: `csv_${Date.now()}_${i}`,
+          Codigo: rr.Codigo ? String(rr.Codigo) : "",
+          Especialidad: esp,
+          Denominacion: rr.Denominacion ? String(rr.Denominacion) : "",
+          Inicio: rr.Inicio ?? null,
+          Fin: rr.Fin ?? null,
+          Modalidad: rr.Modalidad ? String(rr.Modalidad) : "",
+          Centro: rr.Centro ? String(rr.Centro) : "",
+          Municipio: rr.Municipio ? String(rr.Municipio) : "",
+          Nivel: "",
+          SEPE_URL: esp
+            ? `https://sede.sepe.gob.es/especialidadesformativas/RXBuscadorEFRED/DetalleEspecialidad.do?codEspecialidad=${encodeURIComponent(
+                esp
+              )}`
+            : "",
+        } as Course;
+      });
+      setRows(mapped);
+    } else {
+      throw new Error("Extensión no soportada. Usa .xlsx, .xls, .csv o .json.");
     }
+
+    // reset filters after loading
+    setMunicipios([]);
+    setModalidades([]);
+    setSearch("");
+    setOnlyUpcoming(false);
+    setDateFrom("");
+    setDateTo("");
+    setSelectedRowIds({});
+  } catch (e) {
+    console.error(e);
+    alert("No pude cargar el feed. Revisa la URL o si devuelve 404.");
+  }
   }
 
   // derived filter options
@@ -588,15 +658,15 @@ const table = useReactTable({
           </Button>
 
           {/* FEED URL + button */}
-          <Input
-            className="border rounded px-2 py-1 w-[360px]"
-            placeholder="URL del feed (por defecto /madrid_cursos.json)"
-            value={feedUrl}
-            onChange={(e) => setFeedUrl(e.target.value)}
-          />
-          <Button variant="secondary" onClick={loadMadridFeed}>
-            Cargar feed Madrid
-          </Button>
+<Input
+  className="border rounded px-2 py-1 w-[360px]"
+  placeholder="URL del feed (p. ej. /madrid_cursos.xlsx)"
+  value={feedUrl}
+  onChange={(e) => setFeedUrl(e.target.value)}
+/>
+<Button variant="secondary" onClick={loadMadridFeed}>
+  Cargar feed
+</Button>
         </div>
       </div>
 
