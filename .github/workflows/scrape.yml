@@ -5,30 +5,73 @@ on:
     - cron: "5 3 * * *"   # daily at 03:05 UTC
   workflow_dispatch: {}
 
+permissions:
+  contents: write   # << required for git push
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+
     steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true   # uses GITHUB_TOKEN
 
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-      - name: Install deps
+      - name: Install dependencies (Playwright + pandas)
         run: |
           python -m pip install --upgrade pip
           pip install playwright pandas openpyxl
           playwright install --with-deps chromium
+          python - << 'PY'
+          import sys, pkgutil
+          miss = [m for m in ["playwright","pandas","openpyxl"] if not pkgutil.find_loader(m)]
+          assert not miss, f"Missing: {miss}"
+          print("Deps OK")
+          PY
 
       - name: Run scraper
-        run: python scraper/scrape_madrid.py
+        run: |
+          python scraper/scrape_madrid.py
+
+      - name: Show outputs
+        run: |
+          echo "==== tree ===="
+          ls -la
+          echo "==== public ===="
+          ls -la public || true
+          echo "==== file sizes ===="
+          [ -f public/madrid_cursos.json ] && wc -c public/madrid_cursos.json || echo "NO JSON"
+          [ -f public/madrid_cursos.xlsx ] && wc -c public/madrid_cursos.xlsx || echo "NO XLSX"
+
+      - name: Upload artifacts (for manual download/debug)
+        uses: actions/upload-artifact@v4
+        with:
+          name: madrid-cursos-output
+          path: |
+            public/madrid_cursos.json
+            public/madrid_cursos.xlsx
+          if-no-files-found: warn
 
       - name: Commit & push artifacts
         run: |
+          set -e
+          if [ ! -f public/madrid_cursos.json ]; then
+            echo "public/madrid_cursos.json not found. Failing."
+            exit 1
+          fi
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git add public/madrid_cursos.xlsx public/madrid_cursos.json
-          git diff --quiet && echo "No changes" || (git commit -m "chore: update madrid cursos feed" && git push)
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update madrid cursos feed"
+            git push
+          fi

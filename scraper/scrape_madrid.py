@@ -1,7 +1,8 @@
-import re, json
+# scraper/scrape_madrid.py
+import re
 from pathlib import Path
 import pandas as pd
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC = ROOT / "public"
@@ -42,19 +43,31 @@ def run():
         page = ctx.new_page()
         page.goto(URL, wait_until="domcontentloaded")
 
-        # Select “Sí” for Especialidad de certificado
+        # Select “Sí”
         try:
             page.get_by_label(re.compile(r"Especialidad.*certificado", re.I)).select_option(label=re.compile(r"^s[ií]$", re.I))
         except Exception:
-            sel = page.locator("select").first
-            sel.select_option(label=re.compile(r"^s[ií]$", re.I))
+            # fallback: try the first select with 'Sí'
+            found = False
+            for i in range(page.locator("select").count()):
+                try:
+                    page.locator("select").nth(i).select_option(label=re.compile(r"^s[ií]$", re.I))
+                    found = True
+                    break
+                except Exception:
+                    pass
+            if not found:
+                raise RuntimeError("No pude seleccionar 'Sí' en 'Especialidad de certificado'.")
 
-        # Click Buscar
-        page.get_by_role("button", name=re.compile(r"^buscar$", re.I)).click()
+        # Buscar
+        try:
+            page.get_by_role("button", name=re.compile(r"^buscar$", re.I)).click()
+        except PWTimeoutError:
+            pass
         page.wait_for_timeout(2000)
 
-        # Exportar resultados a Excel
-        with page.expect_download() as dl:
+        # Exportar a Excel
+        with page.expect_download(timeout=30000) as dl:
             try:
                 page.get_by_role("button", name=re.compile(r"exportar.*excel", re.I)).click()
             except Exception:
@@ -62,13 +75,19 @@ def run():
         download = dl.value
         download.save_as(EXCEL_PATH)
 
-        # Normalize to JSON
+        if not EXCEL_PATH.exists() or EXCEL_PATH.stat().st_size < 1000:
+            raise RuntimeError("Excel no descargado o vacío.")
+
         df = pd.read_excel(EXCEL_PATH)
+        if df.empty:
+            raise RuntimeError("Excel descargado pero sin filas.")
         df = normalize_cols(df)
         df.to_json(JSON_PATH, orient="records", force_ascii=False)
 
+        print(f"OK → {EXCEL_PATH} ({EXCEL_PATH.stat().st_size} bytes)")
+        print(f"OK → {JSON_PATH} ({JSON_PATH.stat().st_size} bytes)")
+
         ctx.close(); browser.close()
-        print(f"Wrote {EXCEL_PATH} and {JSON_PATH}")
 
 if __name__ == "__main__":
     run()
