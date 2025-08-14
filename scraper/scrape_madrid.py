@@ -2,7 +2,7 @@
 import re
 from pathlib import Path
 import pandas as pd
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError
+from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError, Error as PWError
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC = ROOT / "public"
@@ -47,25 +47,17 @@ def run():
         page = ctx.new_page()
         page.goto(URL, wait_until="domcontentloaded")
 
-        # --- Select “Sí” for “Especialidad de certificado” (value="0") ---
-        # If you know the select has an ID, use it directly:
-        # page.wait_for_selector('#especialidadCertificado')
-        # page.select_option('#especialidadCertificado', '0')
-
-        # General approach (no hard-coded id):
+        # --- Select “Sí” in “Especialidad de certificado” (value="0") ---
         selected = False
-
-        # 1) Try via accessible label (if the page uses a proper <label for>…)
+        # 1) by label, if proper <label for="...">
         try:
             sel = page.get_by_label(re.compile(r"Especialidad.*certificado", re.I))
-            # ensure the option exists before selecting
             page.wait_for_selector(sel.selector + ' >> option[value="0"]', timeout=10000)
             sel.select_option("0")
             selected = True
         except Exception:
             pass
-
-        # 2) Try the select that follows a label containing that text
+        # 2) select following the label text
         if not selected:
             try:
                 xpath = 'xpath=//label[contains(normalize-space(.),"Especialidad") and contains(.,"certificado")]/following::select[1]'
@@ -74,12 +66,11 @@ def run():
                 selected = True
             except Exception:
                 pass
-
-        # 3) Brute: find any <select> that has an option value="0"
+        # 3) any select that contains an option value="0"
         if not selected:
             try:
-                sel_count = page.locator("select").count()
-                for i in range(min(sel_count, 15)):
+                count = page.locator("select").count()
+                for i in range(min(count, 15)):
                     sel_loc = page.locator("select").nth(i)
                     if sel_loc.locator('option[value="0"]').count() > 0:
                         page.select_option(sel_loc, "0")
@@ -87,7 +78,6 @@ def run():
                         break
             except Exception:
                 pass
-
         if not selected:
             raise RuntimeError("No pude seleccionar 'Sí' (value='0') en 'Especialidad de certificado'.")
 
@@ -100,41 +90,73 @@ def run():
             'text=/^Buscar$/',
         ]:
             try:
-                page.locator(sel).first.click(timeout=5000)
+                page.locator(sel).first.click(timeout=6000)
                 buscar_clicked = True
                 break
             except Exception:
                 pass
-
         if not buscar_clicked:
             raise RuntimeError("No pude pulsar el botón Buscar.")
 
-        # Wait for results to show (table or some result container)
+        # Wait for results to appear
         try:
             page.wait_for_selector("table, .tabla, .grid, .resultados", timeout=15000)
         except PWTimeoutError:
-            # give an extra small grace period
             page.wait_for_timeout(2000)
 
-        # --- Exportar a Excel ---
-        with page.expect_download(timeout=30000) as dl:
-            try:
-                page.get_by_role("button", name=re.compile(r"exportar.*excel", re.I)).click()
-            except Exception:
-                # common fallbacks (anchor link or text)
-                for s in [
-                    'a:has-text("Exportar resultados a Excel")',
-                    'a:has-text("Exportar a Excel")',
-                    'text=/Exportar\\s+resultados\\s+a\\s+Excel/i',
-                ]:
-                    try:
-                        page.locator(s).first.click(timeout=4000)
-                        break
-                    except Exception:
-                        pass
-        download = dl.value
-        download.save_as(EXCEL_PATH)
+        # --- Exportar resultados a Excel ---
+        # We will try both download AND response-path.
+        def click_export():
+            tried = 0
+            for s in [
+                'role=button[name=/exportar.*excel/i]',
+                'button:has-text("Exportar resultados a Excel")',
+                'button:has-text("Exportar a Excel")',
+                'a:has-text("Exportar resultados a Excel")',
+                'a:has-text("Exportar a Excel")',
+                'text=/Exportar\\s+resultados\\s+a\\s+Excel/i',
+            ]:
+                try:
+                    page.locator(s).first.click(timeout=4000)
+                    tried += 1
+                    return True
+                except Exception:
+                    pass
+            return tried > 0
 
+        if not click_export():
+            raise RuntimeError("No encontré el control de 'Exportar resultados a Excel'.")
+
+        # Try real download first
+        try:
+            with page.expect_download(timeout=15000) as dl:
+                # click again inside the context for good measure
+                click_export()
+            d = dl.value
+            d.save_as(EXCEL_PATH)
+        except (PWTimeoutError, PWError):
+            # Fallback: response path (server returns Excel directly)
+            def looks_like_excel(resp):
+                ct = (resp.headers.get("content-type") or "").lower()
+                url = resp.url.lower()
+                return (
+                    "excel" in ct
+                    or "spreadsheet" in ct
+                    or url.endswith(".xlsx")
+                    or url.endswith(".xls")
+                )
+
+            try:
+                resp = page.wait_for_response(looks_like_excel, timeout=15000)
+                body = resp.body()
+                # ensure we have bytes
+                if not body:
+                    raise RuntimeError("Respuesta de export vacía.")
+                EXCEL_PATH.write_bytes(body)
+            except PWTimeoutError:
+                raise RuntimeError("No hubo descarga ni respuesta Excel tras pulsar Exportar.")
+
+        # Sanity check
         if not EXCEL_PATH.exists() or EXCEL_PATH.stat().st_size < 1000:
             raise RuntimeError("Excel no descargado o es demasiado pequeño.")
 
