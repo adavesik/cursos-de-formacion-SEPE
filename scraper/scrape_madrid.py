@@ -6,9 +6,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC = ROOT / "public"
-DEBUG = ROOT / "debug"
 PUBLIC.mkdir(parents=True, exist_ok=True)
-DEBUG.mkdir(parents=True, exist_ok=True)
 
 EXCEL_PATH = PUBLIC / "madrid_cursos.xlsx"
 JSON_PATH  = PUBLIC / "madrid_cursos.json"
@@ -42,25 +40,6 @@ def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
     df["RowId"] = [f"madrid_{i}" for i in range(len(df))]
     return df
 
-def click_cookie_consent(page):
-    # Try common Spanish consent buttons
-    selectors = [
-        'button:has-text("Aceptar")',
-        'button:has-text("Aceptar todas")',
-        'text=/Aceptar( todas)? las cookies/i',
-        'role=button[name=/Aceptar/i]',
-    ]
-    for s in selectors:
-        try:
-            el = page.locator(s).first
-            if el.is_visible():
-                el.click(timeout=2000)
-                page.wait_for_timeout(500)
-                return True
-        except Exception:
-            pass
-    return False
-
 def run():
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
@@ -68,37 +47,51 @@ def run():
         page = ctx.new_page()
         page.goto(URL, wait_until="domcontentloaded")
 
-        # Cookie banners (best effort)
-        click_cookie_consent(page)
+        # --- Select “Sí” for “Especialidad de certificado” (value="0") ---
+        # If you know the select has an ID, use it directly:
+        # page.wait_for_selector('#especialidadCertificado')
+        # page.select_option('#especialidadCertificado', '0')
 
-        # Try to select “Sí” for Especialidad de certificado
+        # General approach (no hard-coded id):
         selected = False
+
+        # 1) Try via accessible label (if the page uses a proper <label for>…)
         try:
-            page.get_by_label(re.compile(r"Especialidad.*certificado", re.I)).select_option(
-                label=re.compile(r"^s[ií]$", re.I), timeout=5000
-            )
+            sel = page.get_by_label(re.compile(r"Especialidad.*certificado", re.I))
+            # ensure the option exists before selecting
+            page.wait_for_selector(sel.selector + ' >> option[value="0"]', timeout=10000)
+            sel.select_option("0")
             selected = True
         except Exception:
-            # Fallback: brute-force look through selects
+            pass
+
+        # 2) Try the select that follows a label containing that text
+        if not selected:
+            try:
+                xpath = 'xpath=//label[contains(normalize-space(.),"Especialidad") and contains(.,"certificado")]/following::select[1]'
+                page.wait_for_selector(xpath, timeout=10000)
+                page.select_option(xpath, "0")
+                selected = True
+            except Exception:
+                pass
+
+        # 3) Brute: find any <select> that has an option value="0"
+        if not selected:
             try:
                 sel_count = page.locator("select").count()
-                for i in range(min(sel_count, 10)):
-                    try:
-                        page.locator("select").nth(i).select_option(label=re.compile(r"^s[ií]$", re.I), timeout=1000)
+                for i in range(min(sel_count, 15)):
+                    sel_loc = page.locator("select").nth(i)
+                    if sel_loc.locator('option[value="0"]').count() > 0:
+                        page.select_option(sel_loc, "0")
                         selected = True
                         break
-                    except Exception:
-                        pass
             except Exception:
                 pass
 
         if not selected:
-            page.screenshot(path=str(DEBUG / "00_no_select.png"))
-            html = page.content()
-            (DEBUG / "00_no_select.html").write_text(html, encoding="utf-8")
-            raise RuntimeError("No pude seleccionar 'Sí' en 'Especialidad de certificado'.")
+            raise RuntimeError("No pude seleccionar 'Sí' (value='0') en 'Especialidad de certificado'.")
 
-        # Click Buscar
+        # --- Click “Buscar” ---
         buscar_clicked = False
         for sel in [
             'role=button[name=/^buscar$/i]',
@@ -107,70 +100,51 @@ def run():
             'text=/^Buscar$/',
         ]:
             try:
-                page.locator(sel).first.click(timeout=4000)
+                page.locator(sel).first.click(timeout=5000)
                 buscar_clicked = True
                 break
             except Exception:
                 pass
 
         if not buscar_clicked:
-            page.screenshot(path=str(DEBUG / "01_no_buscar.png"))
-            (DEBUG / "01_no_buscar.html").write_text(page.content(), encoding="utf-8")
             raise RuntimeError("No pude pulsar el botón Buscar.")
 
-        # Wait for results: any table or grid; give it time
+        # Wait for results to show (table or some result container)
         try:
             page.wait_for_selector("table, .tabla, .grid, .resultados", timeout=15000)
         except PWTimeoutError:
-            # Capture state for debugging
-            page.screenshot(path=str(DEBUG / "02_no_resultados.png"), full_page=True)
-            (DEBUG / "02_no_resultados.html").write_text(page.content(), encoding="utf-8")
-            raise RuntimeError("No aparecieron resultados tras Buscar.")
+            # give an extra small grace period
+            page.wait_for_timeout(2000)
 
-        # Exportar a Excel (button or link)
-        download = None
-        try:
-            with page.expect_download(timeout=30000) as dl:
-                try:
-                    page.get_by_role("button", name=re.compile(r"exportar.*excel", re.I)).click()
-                except Exception:
-                    # Try anchor link variants
-                    locs = [
-                        'a:has-text("Exportar resultados a Excel")',
-                        'a:has-text("Exportar a Excel")',
-                        'text=/Exportar\\s+resultados\\s+a\\s+Excel/i',
-                    ]
-                    clicked = False
-                    for l in locs:
-                        try:
-                            page.locator(l).first.click(timeout=3000)
-                            clicked = True
-                            break
-                        except Exception:
-                            pass
-                    if not clicked:
-                        raise RuntimeError("No encontré el control de Exportar a Excel.")
-            download = dl.value
-        except Exception as e:
-            page.screenshot(path=str(DEBUG / "03_no_export.png"), full_page=True)
-            (DEBUG / "03_no_export.html").write_text(page.content(), encoding="utf-8")
-            raise
-
-        # Save the downloaded file
+        # --- Exportar a Excel ---
+        with page.expect_download(timeout=30000) as dl:
+            try:
+                page.get_by_role("button", name=re.compile(r"exportar.*excel", re.I)).click()
+            except Exception:
+                # common fallbacks (anchor link or text)
+                for s in [
+                    'a:has-text("Exportar resultados a Excel")',
+                    'a:has-text("Exportar a Excel")',
+                    'text=/Exportar\\s+resultados\\s+a\\s+Excel/i',
+                ]:
+                    try:
+                        page.locator(s).first.click(timeout=4000)
+                        break
+                    except Exception:
+                        pass
+        download = dl.value
         download.save_as(EXCEL_PATH)
 
         if not EXCEL_PATH.exists() or EXCEL_PATH.stat().st_size < 1000:
-            page.screenshot(path=str(DEBUG / "04_excel_vacio.png"), full_page=True)
             raise RuntimeError("Excel no descargado o es demasiado pequeño.")
 
-        # Convert to JSON
+        # --- Convert to JSON ---
         df = pd.read_excel(EXCEL_PATH)
         if df.empty:
             raise RuntimeError("Excel descargado pero sin filas.")
         df = normalize_cols(df)
         df.to_json(JSON_PATH, orient="records", force_ascii=False)
 
-        # Debug prints
         print(f"OK → {EXCEL_PATH} ({EXCEL_PATH.stat().st_size} bytes)")
         print(f"OK → {JSON_PATH} ({JSON_PATH.stat().st_size} bytes)")
 
