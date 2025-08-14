@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: write   # << required for git push
+  contents: write
 
 jobs:
   scrape:
@@ -17,53 +17,52 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: true   # uses GITHUB_TOKEN
+          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dependencies (Playwright + pandas)
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install playwright pandas openpyxl
           playwright install --with-deps chromium
-          python - << 'PY'
-          import sys, pkgutil
-          miss = [m for m in ["playwright","pandas","openpyxl"] if not pkgutil.find_loader(m)]
-          assert not miss, f"Missing: {miss}"
-          print("Deps OK")
-          PY
 
       - name: Run scraper
         run: |
           python scraper/scrape_madrid.py
 
       - name: Show outputs
+        if: always()
         run: |
-          echo "==== tree ===="
+          echo "==== repo root ===="
           ls -la
           echo "==== public ===="
           ls -la public || true
-          echo "==== file sizes ===="
+          echo "==== debug ===="
+          ls -la debug || true
           [ -f public/madrid_cursos.json ] && wc -c public/madrid_cursos.json || echo "NO JSON"
           [ -f public/madrid_cursos.xlsx ] && wc -c public/madrid_cursos.xlsx || echo "NO XLSX"
 
-      - name: Upload artifacts (for manual download/debug)
+      - name: Upload artifacts (always)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: madrid-cursos-output
           path: |
             public/madrid_cursos.json
             public/madrid_cursos.xlsx
+            debug/**/*.png
+            debug/**/*.html
           if-no-files-found: warn
 
       - name: Commit & push artifacts
         run: |
           set -e
-          if [ ! -f public/madrid_cursos.json ]; then
-            echo "public/madrid_cursos.json not found. Failing."
+          if [ ! -f public/madrid_cursos.xlsx ] || [ ! -f public/madrid_cursos.json ]; then
+            echo "❌ Missing outputs, not committing."
             exit 1
           fi
           git config user.name "github-actions"
