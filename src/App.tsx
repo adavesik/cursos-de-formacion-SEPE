@@ -543,7 +543,7 @@ export default function App() {
 
 async function fetchNivelForSelected() {
   const selected = filtered.filter((r) => selectedRowIds[r.RowId]);
-  console.log("Selected rows:", selected); // Debug: Check selected rows
+  console.log("Selected rows:", selected.map(r => ({ RowId: r.RowId, Especialidad: r.Especialidad })));
   if (!selected.length) {
     alert("Selecciona una o más filas");
     return;
@@ -558,41 +558,70 @@ async function fetchNivelForSelected() {
   try {
     const now = Date.now();
     const toFetch: Course[] = [];
-    setRows((prev) =>
-      prev.map((r) => {
-        if (!selectedRowIds[r.RowId]) return r;
-        const code = normCode(r.Especialidad);
-        const entry = nivelCache[code];
-        console.log(`Checking cache for ${code}:`, entry); // Debug: Cache hit/miss
-        if (entry?.nivel) {
-          return { ...r, Nivel: r.Nivel || entry.nivel, SEPE_URL: r.SEPE_URL || entry.sepe_url || makeUrl(r.Especialidad) };
-        } else {
-          toFetch.push(r);
-          return r;
-        }
-      })
-    );
+    const cachedRows: Course[] = [];
 
-    console.log("Rows to fetch:", toFetch); // Debug: Rows requiring API call
+    // Step 1: Collect rows to fetch and apply cached data
+    for (const row of selected) {
+      const code = normCode(row.Especialidad);
+      console.log(`Checking cache for row ${row.RowId}, code ${code}:`, nivelCache[code]);
+      if (!code) {
+        console.log(`Skipping row ${row.RowId}: Invalid or empty Especialidad`);
+        cachedRows.push({ ...row, Nivel: row.Nivel || "", SEPE_URL: row.SEPE_URL || makeUrl(row.Especialidad) });
+        continue;
+      }
+      const entry = nivelCache[code];
+      if (entry?.nivel && entry.nivel.trim()) {
+        console.log(`Cache hit for ${code}:`, entry);
+        cachedRows.push({ ...row, Nivel: row.Nivel || entry.nivel, SEPE_URL: row.SEPE_URL || entry.sepe_url || makeUrl(row.Especialidad) });
+      } else {
+        console.log(`No valid cache for ${code}, adding to fetch`);
+        toFetch.push(row);
+      }
+    }
+
+    console.log("Rows to fetch:", toFetch.map(r => ({ RowId: r.RowId, Especialidad: r.Especialidad })));
+    console.log("Cached rows:", cachedRows.map(r => ({ RowId: r.RowId, Especialidad: r.Especialidad, Nivel: r.Nivel })));
+
+    // Step 2: Update rows with cached data
+    if (cachedRows.length) {
+      setRows((prev) =>
+        prev.map((r) => {
+          const cached = cachedRows.find(c => c.RowId === r.RowId);
+          return cached || r;
+        })
+      );
+    }
+
+    // Step 3: Exit if no rows need fetching
     if (!toFetch.length) {
-      console.log("All selected rows had cached data, no fetch needed");
-      setSelectedRowIds({}); // Uncheck only if no fetch needed
+      console.log("All selected rows had valid cached data, no fetch needed");
+      setSelectedRowIds((prev) => {
+        const next = { ...prev };
+        for (const row of cachedRows) {
+          if (row.Nivel?.trim()) delete next[row.RowId];
+        }
+        return next;
+      });
       return;
     }
 
+    // Step 4: Fetch data for remaining rows
     const tasks = toFetch.map((row) => async () => {
       const code = normCode(row.Especialidad);
-      if (!code) return { id: row.RowId, nivel: "", sepe_url: makeUrl(row.Especialidad) };
+      if (!code) {
+        console.log(`Skipping fetch for row ${row.RowId}: Invalid code`);
+        return { id: row.RowId, nivel: "", sepe_url: makeUrl(row.Especialidad) };
+      }
       const url = `${apiBase.replace(/\/$/, "")}/?code=${encodeURIComponent(code)}`;
-      console.log(`Fetching: ${url}`); // Debug: Log URL
+      console.log(`Fetching: ${url}`);
       try {
         const res = await fetch(url, {
           cache: "no-store",
-          headers: { "Accept": "application/json" }, // Explicitly request JSON
+          headers: { "Accept": "application/json" },
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         const data = await res.json();
-        console.log(`Response for ${code}:`, data); // Debug: Log API response
+        console.log(`Response for ${code}:`, data);
         if (!data || typeof data.nivel !== "string") {
           throw new Error(`Invalid response format for ${code}: Expected { nivel: string }`);
         }
@@ -602,14 +631,15 @@ async function fetchNivelForSelected() {
         return { id: row.RowId, nivel, sepe_url };
       } catch (error) {
         console.error(`Fetch failed for ${code}:`, error);
-        return { id: row.RowId, nivel: "", sepe_url: makeUrl(row.Especialidad) }; // Fallback
+        return { id: row.RowId, nivel: "", sepe_url: makeUrl(row.Especialidad) };
       }
     });
 
     const results = await pLimit(4, tasks);
-    console.log("Fetch results:", results); // Debug: Log all results
+    console.log("Fetch results:", results);
     const map = new Map(results.map((r) => [r.id, r]));
 
+    // Step 5: Update rows with fetched data
     setRows((prev) =>
       prev.map((r) =>
         map.has(r.RowId)
@@ -618,21 +648,18 @@ async function fetchNivelForSelected() {
       )
     );
 
-    // Only uncheck rows that were successfully processed
+    // Step 6: Uncheck only successfully fetched rows
     setSelectedRowIds((prev) => {
       const next = { ...prev };
       for (const row of toFetch) {
-        if (map.get(row.RowId)?.nivel) delete next[row.RowId]; // Uncheck only if nivel was fetched
+        const result = map.get(row.RowId);
+        if (result?.nivel?.trim()) delete next[row.RowId];
       }
       return next;
     });
   } catch (error) {
     console.error("General error in fetchNivelForSelected:", error);
-    let msg = "Error desconocido";
-    if (error && typeof error === "object" && "message" in error && typeof (error as any).message === "string") {
-      msg = (error as any).message;
-    }
-    alert(`Error al obtener niveles: ${msg}. Revisa el endpoint API o CORS.`);
+    alert(`Error al obtener niveles: ${error || error}. Revisa el endpoint API o CORS.`);
   } finally {
     setLoadingNivel(false);
   }
