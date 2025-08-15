@@ -10,137 +10,28 @@ import {
   getSortedRowModel,
   getPaginationRowModel,
   useReactTable,
+  type SortingState,
 } from "@tanstack/react-table";
-import { format } from "date-fns";
-
-// If you added shadcn/ui Button & Input, import them; otherwise replace with <button>/<input>
+import { debounce } from "lodash";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Download, ExternalLink, Filter as FilterIcon, Loader2, Upload } from "lucide-react";
-
-type Course = {
-  RowId: string;
-  Codigo?: string;
-  Especialidad?: string; // SEPE code
-  Denominacion?: string;
-  Inicio?: string | Date | null;
-  Fin?: string | Date | null;
-  Modalidad?: string;
-  Centro?: string;
-  Municipio?: string;
-  Nivel?: string;
-  SEPE_URL?: string;
-};
-
-const BASE_SEPE =
-  "https://sede.sepe.gob.es/especialidadesformativas/RXBuscadorEFRED/DetalleEspecialidad.do?codEspecialidad=";
-
-const makeUrl = (code?: string) =>
-  code?.trim() ? `${BASE_SEPE}${encodeURIComponent(code.trim())}` : "";
-
-const toDate = (v: any): Date | null => {
-  if (v == null) return null;
-  if (v instanceof Date && !isNaN(+v)) return v;
-  const d = new Date(v);
-  return isNaN(+d) ? null : d;
-};
-
-const fmt = (d: Date | null | undefined) => (d ? format(d, "yyyy-MM-dd") : "");
-
-function normalizeHeaders(obj: any) {
-  // map flexible Spanish headings → normalized keys
-  const out: any = {};
-  const norm = (s: string) =>
-    s
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/\p{Diacritic}/gu, "")
-      .replace(/\s+/g, "")
-      .trim();
-
-  const map: Record<string, string> = {
-    codigodelcurso: "Codigo",
-    codigo: "Codigo",
-    especialidad: "Especialidad",
-    denominacion: "Denominacion",
-    inicio: "Inicio",
-    fin: "Fin",
-    modalidad: "Modalidad",
-    centro: "Centro",
-    municipio: "Municipio",
-    localidad: "Municipio",
-  };
-
-  for (const k of Object.keys(obj)) {
-    const nk = map[norm(k)] || k;
-    out[nk] = obj[k];
-  }
-  return out;
-}
-
-function categorize(text: string): string {
-  const t = (text || "").toLowerCase();
-  const rules: [RegExp, string][] = [
-    [/auxiliar|administrativ|ofim[aá]tica|contabilidad|nomin|gesti[oó]n documental|recepci[oó]n|secretari/, "Administración / Ofimática"],
-    [/atenci[oó]n sociosanitaria|geriatr|dependientes|cuidador|enfermer[ií]a|sanidad|primeros auxilios/, "Sanidad / Atención Social"],
-    [/educaci[oó]n infantil|monitor|docencia|formaci[oó]n para el empleo/, "Educación / Monitoraje"],
-    [/est[eé]tica|peluquer[ií]a|imagen personal|maquillaje|uñas|barber[ií]a|masaje|spa/, "Estética / Imagen Personal"],
-    [/hosteler[ií]a|cocina|pasteler[ií]a|reposter[ií]a|restaurante|camarer/, "Hostelería / Cocina"],
-    [/comercio|ventas|dependient|atenci[oó]n al cliente|marketing|televenta|escaparatismo/, "Comercio / Ventas / Marketing"],
-    [/inform[aá]tica|programaci[oó]n|sistemas|redes|ciberseguridad|tic|desarrollo web|bases de datos/, "Informática / TIC"],
-    [/idiomas?|ingl[eé]s|alem[aá]n|franc[eé]s|espa[ñn]ol/, "Idiomas"],
-    [/log[ií]stica|almac[eé]n|carretillero|cadena de suministro|transporte/, "Logística / Almacén"],
-    [/mec[aá]nica|automoci[oó]n|soldadura|electricidad|mantenimiento|industrial|montaje|instalaciones|climatizaci[oó]n|refrigeraci[oó]n|frigor|fontaner[ií]a|construcci[oó]n|albañiler|carpinter[ií]a/, "Industria / Mantenimiento / Construcción"],
-    [/seguridad|vigilante|prevenci[oó]n de riesgos/, "Seguridad / PRL"],
-    [/limpieza/, "Limpieza"],
-    [/emprendimiento|autoempleo|gesti[oó]n empresarial/, "Emprendimiento / Gestión"],
-  ];
-  for (const [rx, cat] of rules) if (rx.test(t)) return cat;
-  return "Otros";
-}
-
-function toCSV(rows: Course[]): string {
-  const headers = ["Codigo", "Especialidad", "Nivel", "SEPE_URL", "Denominacion", "Inicio", "Fin", "Modalidad", "Centro", "Municipio"];
-  const esc = (s?: any) => `"${String(s ?? "").replace(/"/g, '""')}"`;
-  const body = rows
-    .map((r) =>
-      [
-        r.Codigo,
-        r.Especialidad,
-        r.Nivel,
-        r.SEPE_URL,
-        r.Denominacion,
-        fmt(toDate(r.Inicio as any)),
-        fmt(toDate(r.Fin as any)),
-        r.Modalidad,
-        r.Centro,
-        r.Municipio,
-      ]
-        .map(esc)
-        .join(",")
-    )
-    .join("\n");
-  return [headers.join(","), body].join("\n");
-}
-
-async function pLimit<T>(limit: number, tasks: (() => Promise<T>)[]) {
-  const results: T[] = [];
-  const executing: Promise<any>[] = [];
-  for (const task of tasks) {
-    const p = (async () => {
-      const r = await task();
-      results.push(r);
-    })();
-    executing.push(p);
-    if (executing.length >= limit) await Promise.race(executing);
-    // remove settled
-    for (let i = executing.length - 1; i >= 0; i--) {
-      if ("status" in (executing[i] as any)) executing.splice(i, 1);
-    }
-  }
-  await Promise.all(executing);
-  return results;
-}
+import { Download, ExternalLink, Filter as FilterIcon, Loader2, Upload, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import {
+  type Course,
+  normCode,
+  makeUrl,
+  toDate,
+  fmt,
+  loadNivelCache,
+  saveNivelCache,
+  hydrateNivelFromCache,
+  normalizeHeaders,
+  categorize,
+  toCSV,
+  pLimit,
+  type NivelCacheEntry,
+  NIVEL_CACHE_KEY,
+} from "./utils";
 
 function MultiSelect({
   label,
@@ -172,11 +63,11 @@ function MultiSelect({
 
   const filtered = React.useMemo(() => {
     const qq = q.trim().toLowerCase();
-    return qq ? options.filter(o => o.toLowerCase().includes(qq)) : options;
+    return qq ? options.filter((o) => o.toLowerCase().includes(qq)) : options;
   }, [options, q]);
 
   const toggle = (v: string) => {
-    if (values.includes(v)) onChange(values.filter(x => x !== v));
+    if (values.includes(v)) onChange(values.filter((x) => x !== v));
     else onChange([...values, v]);
   };
 
@@ -187,14 +78,14 @@ function MultiSelect({
       {label ? <div className="text-sm mb-1">{label}</div> : null}
       <button
         type="button"
-        onClick={() => setOpen(o => !o)}
+        onClick={() => setOpen((o) => !o)}
         className="w-full border rounded px-3 py-2 text-left flex items-center gap-2 flex-wrap"
       >
         {values.length === 0 ? (
           <span className="text-muted-foreground">{placeholder}</span>
         ) : (
           <div className="flex items-center gap-1 flex-wrap">
-            {values.slice(0, 4).map(v => (
+            {values.slice(0, 4).map((v) => (
               <span key={v} className="text-xs px-2 py-0.5 rounded bg-muted">
                 {v}
               </span>
@@ -225,7 +116,7 @@ function MultiSelect({
               className="w-full text-left px-3 py-2 text-sm hover:bg-muted/50 flex items-center gap-2"
               onClick={() => onChange(allSelected ? [] : options)}
             >
-              <input type="checkbox" readOnly checked={!!allSelected} className="h-4 w-4" />
+              <input type="checkbox" checked={!!allSelected} onChange={() => {}} className="h-4 w-4" />
               {allSelected ? "Deseleccionar todo" : "Seleccionar todo"}
             </button>
             <div className="border-t" />
@@ -241,7 +132,7 @@ function MultiSelect({
                     onClick={() => toggle(opt)}
                     className="w-full text-left px-3 py-2 text-sm hover:bg-muted/50 flex items-center gap-2"
                   >
-                    <input type="checkbox" readOnly checked={checked} className="h-4 w-4" />
+                    <input type="checkbox" checked={checked} onChange={() => toggle(opt)} className="h-4 w-4" />
                     <span className="truncate">{opt}</span>
                   </button>
                 );
@@ -270,10 +161,31 @@ function MultiSelect({
   );
 }
 
+function SortHeader({ column, label }: { column: any; label: string }) {
+  const dir = column.getIsSorted() as false | "asc" | "desc";
+  return (
+    <button
+      type="button"
+      onClick={column.getToggleSortingHandler()}
+      className="inline-flex items-center gap-1"
+      title="Ordenar"
+    >
+      <span>{label}</span>
+      {dir === "asc" ? (
+        <ArrowUp className="w-3 h-3" />
+      ) : dir === "desc" ? (
+        <ArrowDown className="w-3 h-3" />
+      ) : (
+        <ArrowUpDown className="w-3 h-3 opacity-30" />
+      )}
+    </button>
+  );
+}
+
 export default function App() {
   const fileInput = useRef<HTMLInputElement | null>(null);
   const [rows, setRows] = useState<Course[]>([]);
-  const [apiBase, setApiBase] = useState<string>(""); // e.g., https://nivel-api.yourname.workers.dev
+  const [apiBase, setApiBase] = useState<string>("");
   const [search, setSearch] = useState("");
   const [municipios, setMunicipios] = useState<string[]>([]);
   const [modalidades, setModalidades] = useState<string[]>([]);
@@ -283,9 +195,15 @@ export default function App() {
   const [selectedRowIds, setSelectedRowIds] = useState<Record<string, boolean>>({});
   const [loadingNivel, setLoadingNivel] = useState(false);
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 50 });
-
-  // ---- Feed loader (Madrid JSON) ----
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [nivelCache, setNivelCache] = useState<Record<string, NivelCacheEntry>>(() => loadNivelCache());
   const [feedUrl, setFeedUrl] = useState<string>("/madrid_cursos.xlsx");
+
+  const setSearchDebounced = useMemo(() => debounce((value: string) => setSearch(value), 300), []);
+
+  useEffect(() => {
+    saveNivelCache(nivelCache);
+  }, [nivelCache]);
 
   async function loadMadridFeed() {
     const url = (feedUrl || "").trim();
@@ -294,120 +212,132 @@ export default function App() {
       const res = await fetch(url + `?t=${Date.now()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    const lower = url.toLowerCase();
+      const lower = url.toLowerCase();
 
-    if (lower.endsWith(".json")) {
-      const data: any[] = await res.json();
-      const mapped = data.map((r: any, i: number) => ({
-        RowId: `feed_${Date.now()}_${i}`,
-        Codigo: r.Codigo ?? "",
-        Especialidad: r.Eespecialidad ?? r.Especialidad ?? "",
-        Denominacion: r.Denominacion ?? "",
-        Inicio: r.Inicio ?? null,
-        Fin: r.Fin ?? null,
-        Modalidad: r.Modalidad ?? "",
-        Centro: r.Centro ?? "",
-        Municipio: r.Municipio ?? "",
-        Nivel: r.Nivel ?? "",
-        SEPE_URL:
-          r.SEPE_URL ??
-          (r.Especialidad
-            ? `https://sede.sepe.gob.es/especialidadesformativas/RXBuscadorEFRED/DetalleEspecialidad.do?codEspecialidad=${encodeURIComponent(
-                r.Especialidad
-              )}`
-            : ""),
-      }));
-      setRows(mapped);
-    } else if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
-      const blob = await res.blob();
-      const table = await readXlsxFile(blob, { dateFormat: "yyyy-mm-dd" });
-      if (!table.length) throw new Error("Excel vacío.");
-
-      const headers = (table[0] as any[]).map((h) => String(h || ""));
-      const body = table.slice(1);
-
-      const mapped = body.map((row, i) => {
-        const obj: any = {};
-        headers.forEach((h, idx) => (obj[h] = row[idx] ?? null));
-        const rr = normalizeHeaders(obj);
-        const esp = rr.Especialidad ? String(rr.Especialidad) : "";
-        return {
+      if (lower.endsWith(".json")) {
+        const data: any[] = await res.json();
+        const mapped = data.map((r: any, i: number) => ({
           RowId: `feed_${Date.now()}_${i}`,
-          Codigo: rr.Codigo ? String(rr.Codigo) : "",
-          Especialidad: esp,
-          Denominacion: rr.Denominacion ? String(rr.Denominacion) : "",
-          Inicio: rr.Inicio ?? null,
-          Fin: rr.Fin ?? null,
-          Modalidad: rr.Modalidad ? String(rr.Modalidad) : "",
-          Centro: rr.Centro ? String(rr.Centro) : "",
-          Municipio: rr.Municipio ? String(rr.Municipio) : "",
-          Nivel: "",
-          SEPE_URL: esp
-            ? `https://sede.sepe.gob.es/especialidadesformativas/RXBuscadorEFRED/DetalleEspecialidad.do?codEspecialidad=${encodeURIComponent(
-                esp
-              )}`
-            : "",
-        } as Course;
-      });
-      setRows(mapped);
-    } else if (lower.endsWith(".csv")) {
-      const text = await res.text();
-      const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-      const mapped = (parsed.data as any[]).map((r, i) => {
-        const rr = normalizeHeaders(r);
-        const esp = rr.Especialidad ? String(rr.Especialidad) : "";
-        return {
-          RowId: `csv_${Date.now()}_${i}`,
-          Codigo: rr.Codigo ? String(rr.Codigo) : "",
-          Especialidad: esp,
-          Denominacion: rr.Denominacion ? String(rr.Denominacion) : "",
-          Inicio: rr.Inicio ?? null,
-          Fin: rr.Fin ?? null,
-          Modalidad: rr.Modalidad ? String(rr.Modalidad) : "",
-          Centro: rr.Centro ? String(rr.Centro) : "",
-          Municipio: rr.Municipio ? String(rr.Municipio) : "",
-          Nivel: "",
-          SEPE_URL: esp
-            ? `https://sede.sepe.gob.es/especialidadesformativas/RXBuscadorEFRED/DetalleEspecialidad.do?codEspecialidad=${encodeURIComponent(
-                esp
-              )}`
-            : "",
-        } as Course;
-      });
-      setRows(mapped);
-    } else {
-      throw new Error("Extensión no soportada. Usa .xlsx, .xls, .csv o .json.");
+          Codigo: r.Codigo ?? "",
+          Especialidad: r.Eespecialidad ?? r.Especialidad ?? "",
+          Denominacion: r.Denominacion ?? "",
+          Inicio: r.Inicio ?? null,
+          Fin: r.Fin ?? null,
+          Modalidad: r.Modalidad ?? "",
+          Centro: r.Centro ?? "",
+          Municipio: r.Municipio ?? "",
+          Nivel: r.Nivel ?? "",
+          SEPE_URL: r.SEPE_URL ?? makeUrl(r.Especialidad),
+        })) as Course[];
+        const hydrated = hydrateNivelFromCache(mapped, nivelCache);
+        setRows(hydrated);
+      } else if (lower.endsWith(".xlsx") || lower.endsWith(".xls")) {
+        const blob = await res.blob();
+        const table = await readXlsxFile(blob, { dateFormat: "yyyy-mm-dd" });
+        if (!table.length) throw new Error("Excel vacío.");
+
+        const headers = (table[0] as any[]).map((h) => String(h || ""));
+        const body = table.slice(1);
+
+        const mapped = body.map((row, i) => {
+          const obj: any = {};
+          headers.forEach((h, idx) => (obj[h] = row[idx] ?? null));
+          const rr = normalizeHeaders(obj);
+          const esp = rr.Especialidad ? String(rr.Especialidad) : "";
+          return {
+            RowId: `feed_${Date.now()}_${i}`,
+            Codigo: rr.Codigo ? String(rr.Codigo) : "",
+            Especialidad: esp,
+            Denominacion: rr.Denominacion ? String(rr.Denominacion) : "",
+            Inicio: rr.Inicio ?? null,
+            Fin: rr.Fin ?? null,
+            Modalidad: rr.Modalidad ? String(rr.Modalidad) : "",
+            Centro: rr.Centro ? String(rr.Centro) : "",
+            Municipio: rr.Municipio ? String(rr.Municipio) : "",
+            Nivel: "",
+            SEPE_URL: makeUrl(esp),
+          } as Course;
+        });
+        const hydrated = hydrateNivelFromCache(mapped, nivelCache);
+        setRows(hydrated);
+      } else if (lower.endsWith(".csv")) {
+        const text = await res.text();
+        const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
+        const mapped = (parsed.data as Record<string, any>[]).map((r, i) => {
+          const rr = normalizeHeaders(r);
+          const esp = rr.Especialidad ? String(rr.Especialidad) : "";
+          return {
+            RowId: `csv_${Date.now()}_${i}`,
+            Codigo: rr.Codigo ? String(rr.Codigo) : "",
+            Especialidad: esp,
+            Denominacion: rr.Denominacion ? String(rr.Denominacion) : "",
+            Inicio: rr.Inicio ?? null,
+            Fin: rr.Fin ?? null,
+            Modalidad: rr.Modalidad ? String(rr.Modalidad) : "",
+            Centro: rr.Centro ? String(rr.Centro) : "",
+            Municipio: rr.Municipio ? String(rr.Municipio) : "",
+            Nivel: "",
+            SEPE_URL: makeUrl(esp),
+          } as Course;
+        });
+        const hydrated = hydrateNivelFromCache(mapped, nivelCache);
+        setRows(hydrated);
+      } else {
+        throw new Error("Extensión no soportada. Usa .xlsx, .xls, .csv o .json.");
+      }
+
+      setMunicipios([]);
+      setModalidades([]);
+      setSearch("");
+      setOnlyUpcoming(false);
+      setDateFrom("");
+      setDateTo("");
+      setSelectedRowIds({});
+    } catch (e) {
+      console.error(e);
+      alert("No pude cargar el feed. Revisa la URL o si devuelve 404.");
     }
-
-    // reset filters after loading
-    setMunicipios([]);
-    setModalidades([]);
-    setSearch("");
-    setOnlyUpcoming(false);
-    setDateFrom("");
-    setDateTo("");
-    setSelectedRowIds({});
-  } catch (e) {
-    console.error(e);
-    alert("No pude cargar el feed. Revisa la URL o si devuelve 404.");
-  }
   }
 
-  // derived filter options
   const options = useMemo(() => {
     const muni = Array.from(new Set(rows.map((r) => r.Municipio).filter(Boolean))).sort() as string[];
     const moda = Array.from(new Set(rows.map((r) => r.Modalidad).filter(Boolean))).sort() as string[];
     return { muni, moda };
   }, [rows]);
 
-  // filtering
   const filtered = useMemo(() => {
     let d = [...rows];
+
     if (municipios.length) d = d.filter((r) => r.Municipio && municipios.includes(r.Municipio));
     if (modalidades.length) d = d.filter((r) => r.Modalidad && modalidades.includes(r.Modalidad));
-    if (dateFrom) d = d.filter((r) => !r.Inicio || (toDate(r.Inicio) && toDate(r.Inicio)! >= new Date(dateFrom)));
-    if (dateTo) d = d.filter((r) => !r.Inicio || (toDate(r.Inicio) && toDate(r.Inicio)! <= new Date(dateTo)));
-    if (onlyUpcoming) d = d.filter((r) => !r.Inicio || (toDate(r.Inicio)! >= new Date()));
+
+    if (dateFrom) {
+      const from = new Date(dateFrom);
+      from.setHours(0, 0, 0, 0);
+      d = d.filter((r) => {
+        const di = toDate(r.Inicio);
+        return di != null && di >= from;
+      });
+    }
+
+    if (dateTo) {
+      const to = new Date(dateTo);
+      to.setHours(23, 59, 59, 999);
+      d = d.filter((r) => {
+        const di = toDate(r.Inicio);
+        return di != null && di <= to;
+      });
+    }
+
+    if (onlyUpcoming) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      d = d.filter((r) => {
+        const di = toDate(r.Inicio);
+        return di != null && di >= today;
+      });
+    }
+
     if (search.trim()) {
       const q = search.toLowerCase();
       d = d.filter(
@@ -421,7 +351,6 @@ export default function App() {
     return d;
   }, [rows, municipios, modalidades, dateFrom, dateTo, onlyUpcoming, search]);
 
-  // chart
   const chartData = useMemo(() => {
     const counts = new Map<string, number>();
     filtered.forEach((r) => {
@@ -443,11 +372,19 @@ export default function App() {
   }, [filtered]);
 
   useEffect(() => {
-  setPagination((p) => ({ ...p, pageIndex: 0 }));
-}, [filtered.length]);
+    setPagination((p) => ({ ...p, pageIndex: 0 }));
+  }, [filtered.length]);
 
-  // table
   const col = createColumnHelper<Course>();
+
+  const dateSortFn = (rowA: any, rowB: any, columnId: string) => {
+    const da = toDate(rowA.getValue(columnId));
+    const db = toDate(rowB.getValue(columnId));
+    const va = da ? da.getTime() : -Infinity;
+    const vb = db ? db.getTime() : -Infinity;
+    return va === vb ? 0 : va < vb ? -1 : 1;
+  };
+
   const columns = useMemo(
     () => [
       col.display({
@@ -462,25 +399,35 @@ export default function App() {
           />
         ),
         size: 40,
+        enableSorting: false,
       }),
-      col.accessor("Codigo", { header: "Código", cell: (info) => info.getValue() || "" }),
+      col.accessor("Codigo", {
+        header: ({ column }) => <SortHeader column={column} label="Código" />,
+        cell: (info) => info.getValue() || "",
+      }),
       col.accessor("Especialidad", {
-        header: "Especialidad (SEPE)",
+        header: ({ column }) => <SortHeader column={column} label="Especialidad (SEPE)" />,
         cell: ({ row, getValue }) => (
           <Input
             defaultValue={getValue() || ""}
-            onBlur={(e) => updateRow(row.original.RowId, { Especialidad: e.currentTarget.value, SEPE_URL: makeUrl(e.currentTarget.value) })}
+            onBlur={(e) =>
+              updateRow(row.original.RowId, {
+                Especialidad: e.currentTarget.value,
+                SEPE_URL: makeUrl(e.currentTarget.value),
+              })
+            }
             className="h-8"
           />
         ),
       }),
       col.accessor("Nivel", {
-        header: "Nivel",
+        header: ({ column }) => <SortHeader column={column} label="Nivel" />,
         cell: (info) => <span className="px-2 py-0.5 rounded bg-muted text-xs">{info.getValue() || ""}</span>,
       }),
       col.display({
         id: "sepe",
         header: "SEPE",
+        enableSorting: false,
         cell: ({ row }) =>
           row.original.SEPE_URL ? (
             <a href={row.original.SEPE_URL} target="_blank" className="inline-flex items-center gap-1 text-primary underline">
@@ -490,38 +437,48 @@ export default function App() {
             <span className="text-muted-foreground text-xs">—</span>
           ),
       }),
-      col.accessor("Denominacion", { header: "Denominación" }),
-      col.accessor("Inicio", { header: "Inicio", cell: (info) => fmt(toDate(info.getValue() as any)) }),
-      col.accessor("Fin", { header: "Fin", cell: (info) => fmt(toDate(info.getValue() as any)) }),
-      col.accessor("Modalidad", { header: "Modalidad" }),
-      col.accessor("Centro", { header: "Centro" }),
-      col.accessor("Municipio", { header: "Municipio" }),
+      col.accessor("Denominacion", {
+        header: ({ column }) => <SortHeader column={column} label="Denominación" />,
+      }),
+      col.accessor("Inicio", {
+        header: ({ column }) => <SortHeader column={column} label="Inicio" />,
+        cell: (info) => fmt(toDate(info.getValue())),
+        sortingFn: dateSortFn,
+      }),
+      col.accessor("Fin", {
+        header: ({ column }) => <SortHeader column={column} label="Fin" />,
+        cell: (info) => fmt(toDate(info.getValue())),
+        sortingFn: dateSortFn,
+      }),
+      col.accessor("Modalidad", { header: ({ column }) => <SortHeader column={column} label="Modalidad" /> }),
+      col.accessor("Centro", { header: ({ column }) => <SortHeader column={column} label="Centro" /> }),
+      col.accessor("Municipio", { header: ({ column }) => <SortHeader column={column} label="Municipio" /> }),
     ],
     [selectedRowIds]
   );
 
-const table = useReactTable({
-  data: filtered,
-  columns,
-  getCoreRowModel: getCoreRowModel(),
-  getFilteredRowModel: getFilteredRowModel(),
-  getSortedRowModel: getSortedRowModel(),
-  getPaginationRowModel: getPaginationRowModel(),   // ⬅️ enable
-  state: { pagination },                             // ⬅️ controlled state
-  onPaginationChange: setPagination,                 // ⬅️ updater
-});
+  const table = useReactTable({
+    data: filtered,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    state: { pagination, sorting },
+    onPaginationChange: setPagination,
+    onSortingChange: setSorting,
+  });
 
   function updateRow(id: string, patch: Partial<Course>) {
     setRows((prev) => prev.map((r) => (r.RowId === id ? { ...r, ...patch } : r)));
   }
 
-  // file input handler
   async function handleFile(file: File) {
     const ext = file.name.toLowerCase().split(".").pop() || "";
     if (ext === "csv") {
       const text = await file.text();
       const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
-      const next = (parsed.data as any[]).map((r, i) => {
+      const next = (parsed.data as Record<string, any>[]).map((r, i) => {
         const rr = normalizeHeaders(r);
         const esp = rr.Especialidad ? String(rr.Especialidad) : "";
         return {
@@ -538,7 +495,8 @@ const table = useReactTable({
           SEPE_URL: makeUrl(esp),
         } as Course;
       });
-      setRows(next);
+      const hydrated = hydrateNivelFromCache(next, nivelCache);
+      setRows(hydrated);
       setMunicipios([]);
       setModalidades([]);
       setSearch("");
@@ -549,8 +507,7 @@ const table = useReactTable({
       return;
     }
 
-    // XLS/XLSX
-    const arows = await readXlsxFile(file, { dateFormat: "yyyy-mm-dd" }); // 2D array; dates often come as Date
+    const arows = await readXlsxFile(file, { dateFormat: "yyyy-mm-dd" });
     if (!arows.length) return;
     const headers = (arows[0] as any[]).map((h) => String(h || ""));
     const body = arows.slice(1);
@@ -573,7 +530,8 @@ const table = useReactTable({
         SEPE_URL: makeUrl(esp),
       } as Course;
     });
-    setRows(objects);
+    const hydrated = hydrateNivelFromCache(objects, nivelCache);
+    setRows(hydrated);
     setMunicipios([]);
     setModalidades([]);
     setSearch("");
@@ -588,24 +546,56 @@ const table = useReactTable({
     if (!selected.length) return alert("Selecciona una o más filas");
     if (!apiBase) {
       alert(
-        'Configura un endpoint API para fetch de Nivel (por ejemplo: https://nivel-api.yourname.workers.dev). Endpoint esperado: GET /nivel?especialidad=CODE → { "nivel": "1|2|3" }'
+        'Configura un endpoint API para fetch de Nivel (por ejemplo: https://nivel-api.yourname.workers.dev). Endpoint esperado: GET /?code=CODE → { "nivel": "1|2|3" }'
       );
       return;
     }
     setLoadingNivel(true);
     try {
-      const tasks = selected.map((row) => async () => {
-        const code = (row.Especialidad || "").trim();
-        if (!code) return { id: row.RowId, nivel: "" };
-        const url = `${apiBase.replace(/\/$/, "")}/nivel?especialidad=${encodeURIComponent(code)}`;
-        const res = await fetch(url);
+      const now = Date.now();
+      const toFetch: Course[] = [];
+      setRows((prev) =>
+        prev.map((r) => {
+          if (!selectedRowIds[r.RowId]) return r;
+          const entry = nivelCache[normCode(r.Especialidad)];
+          if (entry?.nivel) {
+            return { ...r, Nivel: r.Nivel || entry.nivel, SEPE_URL: r.SEPE_URL || entry.sepe_url || makeUrl(r.Especialidad) };
+          } else {
+            toFetch.push(r);
+            return r;
+          }
+        })
+      );
+
+      const tasks = toFetch.map((row) => async () => {
+        const code = normCode(row.Especialidad);
+        if (!code) return { id: row.RowId, nivel: "", sepe_url: makeUrl(row.Especialidad) };
+        const url = `${apiBase.replace(/\/$/, "")}/?code=${encodeURIComponent(code)}`;
+        const res = await fetch(url, { cache: "no-store" });
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
-        return { id: row.RowId, nivel: String(data.nivel || "") };
+        const nivel = String(data.nivel || "");
+        const sepe_url = data.sepe_url || makeUrl(code);
+        setNivelCache((prev) => ({ ...prev, [code]: { nivel, sepe_url, ts: now } }));
+        return { id: row.RowId, nivel, sepe_url };
       });
+
       const results = await pLimit(4, tasks);
-      const map = new Map(results.map((r) => [r.id, r.nivel]));
-      setRows((prev) => prev.map((r) => (map.has(r.RowId) ? { ...r, Nivel: map.get(r.RowId)!, SEPE_URL: makeUrl(r.Especialidad) } : r)));
+      const map = new Map(results.map((r) => [r.id, r]));
+
+      setRows((prev) =>
+        prev.map((r) =>
+          map.has(r.RowId)
+            ? { ...r, Nivel: map.get(r.RowId)!.nivel, SEPE_URL: map.get(r.RowId)!.sepe_url || makeUrl(r.Especialidad) }
+            : r
+        )
+      );
+
+      setSelectedRowIds((prev) => {
+        const next = { ...prev };
+        for (const row of selected) delete next[row.RowId];
+        return next;
+      });
     } catch (e) {
       console.error(e);
       alert("Error al obtener niveles. Revisa el endpoint API o CORS.");
@@ -627,7 +617,6 @@ const table = useReactTable({
 
   return (
     <div className="p-4 space-y-4">
-      {/* Top bar */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <h1 className="text-2xl font-bold">Cursos + Nivel (SEPE)</h1>
         <div className="flex flex-wrap items-center gap-2">
@@ -656,21 +645,28 @@ const table = useReactTable({
             <Download className="w-4 h-4 mr-2" />
             Export CSV (filtrado)
           </Button>
-
-          {/* FEED URL + button */}
-<Input
-  className="border rounded px-2 py-1 w-[360px]"
-  placeholder="URL del feed (p. ej. /madrid_cursos.xlsx)"
-  value={feedUrl}
-  onChange={(e) => setFeedUrl(e.target.value)}
-/>
-<Button variant="secondary" onClick={loadMadridFeed}>
-  Cargar feed
-</Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setNivelCache({});
+              localStorage.removeItem(NIVEL_CACHE_KEY);
+              alert("Cache cleared");
+            }}
+          >
+            Clear Cache
+          </Button>
+          <Input
+            className="border rounded px-2 py-1 w-[360px]"
+            placeholder="URL del feed (p. ej. /madrid_cursos.xlsx)"
+            value={feedUrl}
+            onChange={(e) => setFeedUrl(e.target.value)}
+          />
+          <Button variant="secondary" onClick={loadMadridFeed}>
+            Cargar feed
+          </Button>
         </div>
       </div>
 
-      {/* KPIs */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
         <div className="rounded border p-3">
           <div className="text-sm text-muted-foreground">Cursos cargados</div>
@@ -690,87 +686,70 @@ const table = useReactTable({
         </div>
       </div>
 
-      {/* Filters */}
-<div className="rounded border">
-  <div className="p-3 border-b flex items-center justify-between">
-    <div className="font-medium">Filtros</div>
-    <div className="flex items-center gap-2">
-      <button
-        className="px-2 py-1 text-sm border rounded"
-        onClick={() => {
-          setMunicipios([]);
-          setModalidades([]);
-          setDateFrom("");
-          setDateTo("");
-          setOnlyUpcoming(false);
-          setSearch("");
-        }}
-      >
-        Limpiar
-      </button>
-    </div>
-  </div>
+      <div className="rounded border">
+        <div className="p-3 border-b flex items-center justify-between">
+          <div className="font-medium">Filtros</div>
+          <div className="flex items-center gap-2">
+            <button
+              className="px-2 py-1 text-sm border rounded"
+              onClick={() => {
+                setMunicipios([]);
+                setModalidades([]);
+                setDateFrom("");
+                setDateTo("");
+                setOnlyUpcoming(false);
+                setSearch("");
+              }}
+            >
+              Limpiar
+            </button>
+          </div>
+        </div>
 
-  <div className="p-3 grid grid-cols-1 md:grid-cols-6 gap-3">
-    {/* Municipio multi-select */}
-<MultiSelect
-  label="Municipio"
-  options={options.muni}
-  values={municipios}
-  onChange={setMunicipios}
-/>
+        <div className="p-3 grid grid-cols-1 md:grid-cols-6 gap-3">
+          <MultiSelect label="Municipio" options={options.muni} values={municipios} onChange={setMunicipios} />
+          <MultiSelect label="Modalidad" options={options.moda} values={modalidades} onChange={setModalidades} />
+          <div>
+            <div className="text-sm mb-1">Inicio desde</div>
+            <input
+              type="date"
+              className="w-full border rounded p-2"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+            />
+          </div>
+          <div>
+            <div className="text-sm mb-1">Inicio hasta</div>
+            <input
+              type="date"
+              className="w-full border rounded p-2"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              id="upcoming"
+              type="checkbox"
+              checked={onlyUpcoming}
+              onChange={(e) => setOnlyUpcoming(e.target.checked)}
+            />
+            <label htmlFor="upcoming" className="text-sm">
+              Solo próximos
+            </label>
+          </div>
+          <div className="md:col-span-2">
+            <div className="text-sm mb-1">Buscar</div>
+            <input
+              className="w-full border rounded p-2"
+              placeholder="denominación, centro, especialidad, municipio..."
+              value={search}
+              onChange={(e) => setSearchDebounced(e.target.value)}
+            />
+          </div>
+        </div>
+      </div>
 
-<MultiSelect
-  label="Modalidad"
-  options={options.moda}
-  values={modalidades}
-  onChange={setModalidades}
-/>
-
-    {/* Keep your date + upcoming + search controls as you had them */}
-    <div>
-      <div className="text-sm mb-1">Inicio desde</div>
-      <input
-        type="date"
-        className="w-full border rounded p-2"
-        value={dateFrom}
-        onChange={(e) => setDateFrom(e.target.value)}
-      />
-    </div>
-    <div>
-      <div className="text-sm mb-1">Inicio hasta</div>
-      <input
-        type="date"
-        className="w-full border rounded p-2"
-        value={dateTo}
-        onChange={(e) => setDateTo(e.target.value)}
-      />
-    </div>
-    <div className="flex items-center gap-2">
-      <input
-        id="upcoming"
-        type="checkbox"
-        checked={onlyUpcoming}
-        onChange={(e) => setOnlyUpcoming(e.target.checked)}
-      />
-      <label htmlFor="upcoming" className="text-sm">
-        Solo próximos
-      </label>
-    </div>
-
-    <div className="md:col-span-2">
-      <div className="text-sm mb-1">Buscar</div>
-      <input
-        className="w-full border rounded p-2"
-        placeholder="denominación, centro, especialidad, municipio..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
-    </div>
-  </div>
-</div>
-
-      {/* Chart */}
       <div className="rounded border">
         <div className="p-3 border-b font-medium">Distribución por categoría (filtrado)</div>
         <div className="p-3">
@@ -778,7 +757,6 @@ const table = useReactTable({
         </div>
       </div>
 
-      {/* Actions */}
       <div className="flex items-center gap-2">
         <Button onClick={fetchNivelForSelected} disabled={loadingNivel}>
           {loadingNivel ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <FilterIcon className="w-4 h-4 mr-2" />}
@@ -787,14 +765,17 @@ const table = useReactTable({
         <span className="text-sm text-muted-foreground">Selecciona filas con la casilla de la 1ª columna.</span>
       </div>
 
-      {/* Table */}
       <div className="rounded-md border overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id}>
                 {hg.headers.map((h) => (
-                  <th key={h.id} className="text-left font-medium p-2">
+                  <th
+                    key={h.id}
+                    className="text-left font-medium p-2"
+                    aria-sort={h.column.getIsSorted() === "asc" ? "ascending" : h.column.getIsSorted() === "desc" ? "descending" : "none"}
+                  >
                     {h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}
                   </th>
                 ))}
@@ -813,71 +794,56 @@ const table = useReactTable({
             ))}
           </tbody>
         </table>
-        <div className="flex flex-col md:flex-row items-center justify-between gap-3 mt-3">
-  <div className="text-sm text-muted-foreground">
-    Mostrando{" "}
-    <strong>
-      {filtered.length === 0
-        ? 0
-        : pagination.pageIndex * pagination.pageSize + 1}
-      {"–"}
-      {Math.min((pagination.pageIndex + 1) * pagination.pageSize, filtered.length)}
-    </strong>{" "}
-    de <strong>{filtered.length}</strong>
-  </div>
 
-  <div className="flex items-center gap-2">
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => table.setPageIndex(0)}
-      disabled={!table.getCanPreviousPage()}
-    >
-      « Primero
-    </Button>
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => table.previousPage()}
-      disabled={!table.getCanPreviousPage()}
-    >
-      ‹ Anterior
-    </Button>
-    <span className="text-sm">
-      Página <strong>{table.getState().pagination.pageIndex + 1}</strong> de{" "}
-      <strong>{table.getPageCount() || 1}</strong>
-    </span>
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => table.nextPage()}
-      disabled={!table.getCanNextPage()}
-    >
-      Siguiente ›
-    </Button>
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => table.setPageIndex(table.getPageCount() - 1)}
-      disabled={!table.getCanNextPage()}
-    >
-      Último »
-    </Button>
+        <div className="flex flex-col md:flex-row items-center justify-between gap-3 mt-3 px-2 pb-3">
+          <div className="text-sm text-muted-foreground">
+            Mostrando{" "}
+            <strong>
+              {filtered.length === 0 ? 0 : pagination.pageIndex * pagination.pageSize + 1}
+              {"–"}
+              {Math.min((pagination.pageIndex + 1) * pagination.pageSize, filtered.length)}
+            </strong>{" "}
+            de <strong>{filtered.length}</strong>
+          </div>
 
-    <div className="flex items-center gap-2">
-      <span className="text-sm">Filas por página:</span>
-      <select
-        className="border rounded px-2 py-1 text-sm"
-        value={pagination.pageSize}
-        onChange={(e) => table.setPageSize(Number(e.target.value))}
-      >
-        {[20, 50, 100, 200, 500].map((s) => (
-          <option key={s} value={s}>{s}</option>
-        ))}
-      </select>
-    </div>
-  </div>
-</div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => table.setPageIndex(0)} disabled={!table.getCanPreviousPage()}>
+              « Primero
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>
+              ‹ Anterior
+            </Button>
+            <span className="text-sm">
+              Página <strong>{table.getState().pagination.pageIndex + 1}</strong> de <strong>{table.getPageCount() || 1}</strong>
+            </span>
+            <Button variant="outline" size="sm" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>
+              Siguiente ›
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => table.setPageIndex(table.getPageCount() - 1)}
+              disabled={!table.getCanNextPage()}
+            >
+              Último »
+            </Button>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm">Filas por página:</span>
+              <select
+                className="border rounded px-2 py-1 text-sm"
+                value={pagination.pageSize}
+                onChange={(e) => table.setPageSize(Number(e.target.value))}
+              >
+                {[20, 50, 100, 200, 500].map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
