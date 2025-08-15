@@ -1,3 +1,4 @@
+import { Analytics } from "@vercel/analytics/react"
 import React, { useMemo, useRef, useState, useEffect } from "react";
 import readXlsxFile from "read-excel-file";
 import Papa from "papaparse";
