@@ -541,68 +541,102 @@ export default function App() {
     setSelectedRowIds({});
   }
 
-  async function fetchNivelForSelected() {
-    const selected = filtered.filter((r) => selectedRowIds[r.RowId]);
-    if (!selected.length) return alert("Selecciona una o más filas");
-    if (!apiBase) {
-      alert(
-        'Configura un endpoint API para fetch de Nivel (por ejemplo: https://nivel-api.yourname.workers.dev). Endpoint esperado: GET /?code=CODE → { "nivel": "1|2|3" }'
-      );
+async function fetchNivelForSelected() {
+  const selected = filtered.filter((r) => selectedRowIds[r.RowId]);
+  console.log("Selected rows:", selected); // Debug: Check selected rows
+  if (!selected.length) {
+    alert("Selecciona una o más filas");
+    return;
+  }
+  if (!apiBase) {
+    alert(
+      'Configura un endpoint API para fetch de Nivel (por ejemplo: https://nivel-api.yourname.workers.dev). Endpoint esperado: GET /?code=CODE → { "nivel": "1|2|3" }'
+    );
+    return;
+  }
+  setLoadingNivel(true);
+  try {
+    const now = Date.now();
+    const toFetch: Course[] = [];
+    setRows((prev) =>
+      prev.map((r) => {
+        if (!selectedRowIds[r.RowId]) return r;
+        const code = normCode(r.Especialidad);
+        const entry = nivelCache[code];
+        console.log(`Checking cache for ${code}:`, entry); // Debug: Cache hit/miss
+        if (entry?.nivel) {
+          return { ...r, Nivel: r.Nivel || entry.nivel, SEPE_URL: r.SEPE_URL || entry.sepe_url || makeUrl(r.Especialidad) };
+        } else {
+          toFetch.push(r);
+          return r;
+        }
+      })
+    );
+
+    console.log("Rows to fetch:", toFetch); // Debug: Rows requiring API call
+    if (!toFetch.length) {
+      console.log("All selected rows had cached data, no fetch needed");
+      setSelectedRowIds({}); // Uncheck only if no fetch needed
       return;
     }
-    setLoadingNivel(true);
-    try {
-      const now = Date.now();
-      const toFetch: Course[] = [];
-      setRows((prev) =>
-        prev.map((r) => {
-          if (!selectedRowIds[r.RowId]) return r;
-          const entry = nivelCache[normCode(r.Especialidad)];
-          if (entry?.nivel) {
-            return { ...r, Nivel: r.Nivel || entry.nivel, SEPE_URL: r.SEPE_URL || entry.sepe_url || makeUrl(r.Especialidad) };
-          } else {
-            toFetch.push(r);
-            return r;
-          }
-        })
-      );
 
-      const tasks = toFetch.map((row) => async () => {
-        const code = normCode(row.Especialidad);
-        if (!code) return { id: row.RowId, nivel: "", sepe_url: makeUrl(row.Especialidad) };
-        const url = `${apiBase.replace(/\/$/, "")}/?code=${encodeURIComponent(code)}`;
-        const res = await fetch(url, { cache: "no-store" });
-        if (!res.ok) throw new Error("HTTP " + res.status);
+    const tasks = toFetch.map((row) => async () => {
+      const code = normCode(row.Especialidad);
+      if (!code) return { id: row.RowId, nivel: "", sepe_url: makeUrl(row.Especialidad) };
+      const url = `${apiBase.replace(/\/$/, "")}/?code=${encodeURIComponent(code)}`;
+      console.log(`Fetching: ${url}`); // Debug: Log URL
+      try {
+        const res = await fetch(url, {
+          cache: "no-store",
+          headers: { "Accept": "application/json" }, // Explicitly request JSON
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
         const data = await res.json();
+        console.log(`Response for ${code}:`, data); // Debug: Log API response
+        if (!data || typeof data.nivel !== "string") {
+          throw new Error(`Invalid response format for ${code}: Expected { nivel: string }`);
+        }
         const nivel = String(data.nivel || "");
         const sepe_url = data.sepe_url || makeUrl(code);
         setNivelCache((prev) => ({ ...prev, [code]: { nivel, sepe_url, ts: now } }));
         return { id: row.RowId, nivel, sepe_url };
-      });
+      } catch (error) {
+        console.error(`Fetch failed for ${code}:`, error);
+        return { id: row.RowId, nivel: "", sepe_url: makeUrl(row.Especialidad) }; // Fallback
+      }
+    });
 
-      const results = await pLimit(4, tasks);
-      const map = new Map(results.map((r) => [r.id, r]));
+    const results = await pLimit(4, tasks);
+    console.log("Fetch results:", results); // Debug: Log all results
+    const map = new Map(results.map((r) => [r.id, r]));
 
-      setRows((prev) =>
-        prev.map((r) =>
-          map.has(r.RowId)
-            ? { ...r, Nivel: map.get(r.RowId)!.nivel, SEPE_URL: map.get(r.RowId)!.sepe_url || makeUrl(r.Especialidad) }
-            : r
-        )
-      );
+    setRows((prev) =>
+      prev.map((r) =>
+        map.has(r.RowId)
+          ? { ...r, Nivel: map.get(r.RowId)!.nivel, SEPE_URL: map.get(r.RowId)!.sepe_url || makeUrl(r.Especialidad) }
+          : r
+      )
+    );
 
-      setSelectedRowIds((prev) => {
-        const next = { ...prev };
-        for (const row of selected) delete next[row.RowId];
-        return next;
-      });
-    } catch (e) {
-      console.error(e);
-      alert("Error al obtener niveles. Revisa el endpoint API o CORS.");
-    } finally {
-      setLoadingNivel(false);
+    // Only uncheck rows that were successfully processed
+    setSelectedRowIds((prev) => {
+      const next = { ...prev };
+      for (const row of toFetch) {
+        if (map.get(row.RowId)?.nivel) delete next[row.RowId]; // Uncheck only if nivel was fetched
+      }
+      return next;
+    });
+  } catch (error) {
+    console.error("General error in fetchNivelForSelected:", error);
+    let msg = "Error desconocido";
+    if (error && typeof error === "object" && "message" in error && typeof (error as any).message === "string") {
+      msg = (error as any).message;
     }
+    alert(`Error al obtener niveles: ${msg}. Revisa el endpoint API o CORS.`);
+  } finally {
+    setLoadingNivel(false);
   }
+}
 
   function exportCSV() {
     const csv = toCSV(filtered);
