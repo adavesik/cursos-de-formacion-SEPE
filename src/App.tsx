@@ -907,6 +907,7 @@ async function fetchNivelForSelected() {
           </div>
         </div>
       </div>
+      <Analytics />
     </div>
   );
 }
