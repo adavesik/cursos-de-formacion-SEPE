@@ -1,69 +1,66 @@
-# React + TypeScript + Vite
+# SEPE Cursos
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Welcome to **SEPE Cursos**! This easy-to-use web app helps you explore and manage course data from SEPE (Servicio Público de Empleo Estatal). Whether you want to find training courses in Spain, filter by location or date, or export data for reports, this app makes it simple.
 
-Currently, two official plugins are available:
+## What is this about?
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+With SEPE Cursos, you can:
+- **Load course data**: Upload Excel or CSV files or fetch data from a web link.
+- **Filter courses**: Search by city, course type, dates, or keywords.
+- **Sort courses**: Organize courses by code, name, start date, or other fields.
+- **View charts**: See a bar chart of course categories (e.g., IT, Healthcare).
+- **Fetch course levels**: Get official SEPE course levels (e.g., Level 1, 2, 3) using an API.
+- **Export data**: Save filtered courses as a CSV file.
 
-## Expanding the ESLint configuration
+## How to Access
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+You can use SEPE Cursos in two ways:
+- **Online**: Visit https://cursosformacionsepe.vercel.app
+- **Locally**: Run the app on your computer by following the setup steps below.
 
-```js
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Getting Started
 
-      // Remove tseslint.configs.recommended and replace with this
-      ...tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      ...tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      ...tseslint.configs.stylisticTypeChecked,
+### Option 1: Use the Online Version
+1. Go to https://cursosformacionsepe.vercel.app
+2. Upload a file or enter a data feed URL (e.g., `/madrid_cursos.xlsx`).
+3. Start filtering, sorting, or exporting courses!
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+### Option 2: Run Locally
+To run the app on your computer:
+1. **Install Node.js**: Download it from [nodejs.org](https://nodejs.org) (choose the "LTS" version).
+2. **Get the Code**:
+```bash
+   git clone https://github.com/your-username/sepe-cursos.git
+   cd sepe-cursos
+```
+3. **Install Dependencies:**
+```bash
+npm install
+```
+4. **Start the App:**
+```bash
+npm start
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## How to Use
+### Load Data
+- Click "Importar Excel/CSV" to upload an Excel or CSV file.
+- Or, type a URL (e.g., /madrid_cursos.xlsx) in the "URL del feed" field and click "Cargar feed".
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+###Filter Courses
+- Choose cities, course types, or date ranges in the filter panel.
+- Check "Solo próximos" to see only upcoming courses.
+- Type in the search bar to find courses by name, center, or other details.
 
-export default tseslint.config([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+###Sort Courses
+- Click table headers (e.g., "Código", "Inicio") to sort the list.
+
+###Fetch Course Levels
+- Enter your API URL (e.g., https://nivel-api.yourname.workers.dev) in the "API base" field.
+- Select courses with checkboxes, then click "Fetch Nivel (SEPE)" to get course levels.
+
+###Export Data
+- Click "Export CSV (filtrado)" to download filtered courses as a CSV file.
+
+##Demo
+Try the app live at https://cursosformacionsepe.vercel.app
